@@ -1,0 +1,10 @@
+[project]
+name = "gmail-inbox-cleaner"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.4.1",
+    "google-api-python-client>=2.196.0",
+    "google-auth>=2.53.0",
+    "google-auth-oauthlib>=1.4.0",
+]
