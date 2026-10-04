@@ -85,9 +85,7 @@ def get_header_value(payload: dict[str, Any], header_name: str) -> str:
     return ""
 
 
-def write_largest_emails(
-    gmail_service: Any, size: str, filepath: Path
-) -> int:
+def write_largest_emails(gmail_service: Any, size: str, filepath: Path) -> int:
     """Export matching large Gmail messages to CSV and return the number written."""
     query = f"larger:{size}"
     page_token = None
@@ -153,6 +151,8 @@ def cli() -> None:
 
 @cli.command()
 def get_most_frequent_senders() -> None:
+    output_folder = Path("output/")
+    output_folder.mkdir(exist_ok=True)
     creds = get_gmail_creds()
 
     sender_counts: dict[str, int] = Counter()
@@ -200,7 +200,7 @@ def get_most_frequent_senders() -> None:
         raise click.ClickException(f"Gmail API request failed: {error}") from error
 
     print(f"Processed {sum(sender_counts.values())} emails.")
-    write_sender_counts_to_csv(sender_counts, Path("output.csv"))
+    write_sender_counts_to_csv(sender_counts, output_folder / "sender_counts.csv")
 
 
 @cli.command()
@@ -216,10 +216,12 @@ def get_most_frequent_senders() -> None:
     show_default=True,
 )
 def get_largest_emails(size: str, output: Path) -> None:
+    output_folder = Path("output/")
+    output_folder.mkdir(exist_ok=True)
     creds = get_gmail_creds()
     try:
         service = build("gmail", "v1", credentials=creds)
-        email_count = write_largest_emails(service, size, output)
+        email_count = write_largest_emails(service, size, output_folder / output)
     except HttpError as error:
         raise click.ClickException(f"Gmail API request failed: {error}") from error
     except OSError as error:
