@@ -5,6 +5,7 @@ import time
 import multiprocessing
 import os.path
 import csv
+from email.utils import parseaddr
 from typing import Any
 
 import click
@@ -63,12 +64,14 @@ def fetch_sender_for_threads(gmail_service: Any, thread: Any) -> str:
 
 
 def write_sender_counts_to_csv(sender_counts: dict[str, int], filepath: Path) -> None:
-    with open(filepath, "w") as csvfile:
-        fieldnames = ["Sender", "Count"]
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        fieldnames = ["Sender Name", "Sender Email", "Count"]
         writer = csv.writer(csvfile)
         writer.writerow(fieldnames)
         rows = sorted(sender_counts.items(), key=lambda item: item[1], reverse=True)
-        writer.writerows(rows)
+        writer.writerows(
+            [*parseaddr(sender), count] for sender, count in rows
+        )
 
 
 def get_header_value(payload: dict[str, Any], header_name: str) -> str:
@@ -85,63 +88,86 @@ def get_header_value(payload: dict[str, Any], header_name: str) -> str:
     return ""
 
 
+def format_size(size_bytes: int) -> str:
+    """Format a byte count using decimal units for the largest-email report."""
+    units = ("B", "KB", "MB", "GB", "TB")
+    value = float(size_bytes)
+    unit_index = 0
+
+    while value >= 1000 and unit_index < len(units) - 1:
+        value /= 1000
+        unit_index += 1
+
+    rounded_value = round(value, 1)
+    if rounded_value >= 1000 and unit_index < len(units) - 1:
+        rounded_value /= 1000
+        unit_index += 1
+
+    display_value = f"{rounded_value:.1f}".rstrip("0").rstrip(".")
+    return f"{display_value} {units[unit_index]}"
+
+
 def write_largest_emails(gmail_service: Any, size: str, filepath: Path) -> int:
     """Export matching large Gmail messages to CSV and return the number written."""
     query = f"larger:{size}"
     page_token = None
-    count = 0
+    messages: list[tuple[int, list[str]]] = []
 
-    with filepath.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["Date", "From", "Subject", "Size (bytes)", "Thread ID"])
+    while True:
+        results = (
+            gmail_service.users()
+            .messages()
+            .list(
+                userId="me",
+                q=query,
+                maxResults=500,
+                pageToken=page_token,
+            )
+            .execute(num_retries=5)
+        )
+        next_page_token = results.get("nextPageToken")
 
-        while True:
-            results = (
+        for message in results.get("messages", []):
+            details = (
                 gmail_service.users()
                 .messages()
-                .list(
+                .get(
                     userId="me",
-                    q=query,
-                    maxResults=500,
-                    pageToken=page_token,
+                    id=message["id"],
+                    format="metadata",
+                    metadataHeaders=["Date", "From", "Subject"],
                 )
                 .execute(num_retries=5)
             )
-            next_page_token = results.get("nextPageToken")
+            size_bytes = details.get("sizeEstimate", 0)
+            if size_bytes < SIZE_BYTES[size]:
+                continue
 
-            for message in results.get("messages", []):
-                details = (
-                    gmail_service.users()
-                    .messages()
-                    .get(
-                        userId="me",
-                        id=message["id"],
-                        format="metadata",
-                        metadataHeaders=["Date", "From", "Subject"],
-                    )
-                    .execute(num_retries=5)
-                )
-                size_bytes = details.get("sizeEstimate", 0)
-                if size_bytes < SIZE_BYTES[size]:
-                    continue
-
-                payload = details.get("payload", {})
-                writer.writerow(
+            payload = details.get("payload", {})
+            messages.append(
+                (
+                    size_bytes,
                     [
                         get_header_value(payload, "Date"),
                         get_header_value(payload, "From"),
                         get_header_value(payload, "Subject"),
-                        size_bytes,
+                        format_size(size_bytes),
                         details.get("threadId", ""),
-                    ]
+                    ],
                 )
-                count += 1
+            )
 
-            if not next_page_token:
-                break
-            page_token = next_page_token
+        if not next_page_token:
+            break
+        page_token = next_page_token
 
-    return count
+    messages.sort(key=lambda item: item[0], reverse=True)
+    with filepath.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Date", "From", "Subject", "Size", "Thread ID"])
+        writer.writerows(row for _, row in messages)
+
+    return len(messages)
 
 
 @click.group()
