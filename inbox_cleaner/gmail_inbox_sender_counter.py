@@ -9,12 +9,14 @@ from typing import Any
 
 import click
 from google.auth.transport.requests import Request
+from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SIZE_BYTES = {"100K": 100_000, "1M": 1_000_000, "5M": 5_000_000, "10M": 10_000_000}
 
 
 def get_gmail_creds() -> Any:
@@ -69,6 +71,81 @@ def write_sender_counts_to_csv(sender_counts: dict[str, int], filepath: Path) ->
         writer.writerows(rows)
 
 
+def get_header_value(payload: dict[str, Any], header_name: str) -> str:
+    """Find a message header in Gmail's list of name/value header objects.
+
+    Gmail returns headers as a list rather than a mapping, and header-name casing
+    can vary. This helper centralizes case-insensitive lookup for the report's
+    Date, From, and Subject columns, returning an empty value when a message
+    doesn't include the requested header.
+    """
+    for header in payload.get("headers", []):
+        if header.get("name", "").casefold() == header_name.casefold():
+            return header.get("value", "")
+    return ""
+
+
+def write_largest_emails(
+    gmail_service: Any, size: str, filepath: Path
+) -> int:
+    """Export matching large Gmail messages to CSV and return the number written."""
+    query = f"larger:{size}"
+    page_token = None
+    count = 0
+
+    with filepath.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Date", "From", "Subject", "Size (bytes)", "Thread ID"])
+
+        while True:
+            results = (
+                gmail_service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    q=query,
+                    maxResults=500,
+                    pageToken=page_token,
+                )
+                .execute(num_retries=5)
+            )
+            next_page_token = results.get("nextPageToken")
+
+            for message in results.get("messages", []):
+                details = (
+                    gmail_service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=message["id"],
+                        format="metadata",
+                        metadataHeaders=["Date", "From", "Subject"],
+                    )
+                    .execute(num_retries=5)
+                )
+                size_bytes = details.get("sizeEstimate", 0)
+                if size_bytes < SIZE_BYTES[size]:
+                    continue
+
+                payload = details.get("payload", {})
+                writer.writerow(
+                    [
+                        get_header_value(payload, "Date"),
+                        get_header_value(payload, "From"),
+                        get_header_value(payload, "Subject"),
+                        size_bytes,
+                        details.get("threadId", ""),
+                    ]
+                )
+                count += 1
+
+            if not next_page_token:
+                break
+            page_token = next_page_token
+
+    return count
+
+
 @click.group()
 def cli() -> None:
     pass
@@ -119,9 +196,8 @@ def get_most_frequent_senders() -> None:
                 .execute(num_retries=5)
             )
             threads = results.get("threads", [])
-    except Exception as error:
-        print(f"An error occurred: {error}")
-        breakpoint()
+    except HttpError as error:
+        raise click.ClickException(f"Gmail API request failed: {error}") from error
 
     print(f"Processed {sum(sender_counts.values())} emails.")
     write_sender_counts_to_csv(sender_counts, Path("output.csv"))
@@ -133,24 +209,23 @@ def get_most_frequent_senders() -> None:
     type=click.Choice(["100K", "1M", "5M", "10M"], case_sensitive=True),
     default="1M",
 )
-def get_largest_emails(size: str) -> None:
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default="largest_emails.csv",
+    show_default=True,
+)
+def get_largest_emails(size: str, output: Path) -> None:
     creds = get_gmail_creds()
-    page_count = 500
     try:
         service = build("gmail", "v1", credentials=creds)
-        results = (
-            service.users()
-            .threads()
-            .list(userId="me", q=f"larger:{size}", maxResults=page_count)
-            .execute()
-        )
-        threads = results.get("threads", [])
-    except Exception as error:
-        # TODO(developer) - Handle errors from gmail API.
-        print(f"An error occurred: {error}")
-        breakpoint()
+        email_count = write_largest_emails(service, size, output)
+    except HttpError as error:
+        raise click.ClickException(f"Gmail API request failed: {error}") from error
+    except OSError as error:
+        raise click.ClickException(f"Could not write {output}: {error}") from error
 
-    raise NotImplementedError()
+    click.echo(f"Wrote {email_count} emails to {output}.")
 
 
 if __name__ == "__main__":
