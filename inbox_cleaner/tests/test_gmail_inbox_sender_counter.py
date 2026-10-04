@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from gmail_inbox_sender_counter import write_largest_emails
+from gmail_inbox_sender_counter import (
+    format_size,
+    write_largest_emails,
+    write_sender_counts_to_csv,
+)
 
 
 class FakeRequest:
@@ -98,15 +102,48 @@ class WriteLargestEmailsTests(unittest.TestCase):
         self.assertEqual(
             rows,
             [
-                ["Date", "From", "Subject", "Size (bytes)", "Thread ID"],
+                ["Date", "From", "Subject", "Size", "Thread ID"],
+                ["", "", "Another large one", "5.1 MB", "thread-3"],
                 [
                     "Sun, 4 Oct 2026 12:00:00 -0400",
                     "sender@example.com",
                     "Large message",
-                    "1200000",
+                    "1.2 MB",
                     "thread-1",
                 ],
-                ["", "", "Another large one", "5100000", "thread-3"],
+            ],
+        )
+
+    def test_formats_sizes_with_decimal_units(self) -> None:
+        """Verify compact decimal-unit formatting, including unit rollover."""
+        self.assertEqual(format_size(128_000), "128 KB")
+        self.assertEqual(format_size(1_400_000), "1.4 MB")
+        self.assertEqual(format_size(999_999), "1 MB")
+
+
+class WriteSenderCountsTests(unittest.TestCase):
+    def test_writes_sender_name_email_and_count(self) -> None:
+        """Verify sender display names and email addresses occupy separate columns."""
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "senders.csv"
+
+            write_sender_counts_to_csv(
+                {
+                    '"Ada, Example" <ada@example.com>': 3,
+                    "plain@example.com": 1,
+                },
+                output,
+            )
+
+            with output.open(newline="", encoding="utf-8") as csvfile:
+                rows = list(csv.reader(csvfile))
+
+        self.assertEqual(
+            rows,
+            [
+                ["Sender Name", "Sender Email", "Count"],
+                ["Ada, Example", "ada@example.com", "3"],
+                ["", "plain@example.com", "1"],
             ],
         )
 

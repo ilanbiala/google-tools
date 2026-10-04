@@ -25,7 +25,7 @@ uv run python gmail_inbox_sender_counter.py get-largest-emails --size 5M
 The sender report is written to `output.csv`. The largest-email report defaults to `largest_emails.csv`; use `--output PATH` to choose a different destination.
 
 ### Most Frequent Senders
-The `get-most-frequent-senders` subcommand scans your inbox and finds the most frequent senders so you can delete those emails and unsubscribe to them as needed.
+The `get-most-frequent-senders` subcommand scans your inbox and finds the most frequent senders so you can delete those emails and unsubscribe to them as needed. Its CSV output contains sender name, sender email, and sender count columns.
 
 ### Largest Emails
-The `get-largest-emails` subcommand scans messages larger than the selected size (`100K`, `1M`, `5M`, or `10M`) and exports their date, sender, subject, size, and Gmail thread ID. Google's free up space tool offers something similar to this.
+The `get-largest-emails` subcommand scans messages larger than the selected size (`100K`, `1M`, `5M`, or `10M`) and exports their date, sender, subject, human-readable size (using decimal units such as `128 KB` or `1.4 MB`), and Gmail thread ID, sorted from largest to smallest. Google's free up space tool offers something similar to this.
